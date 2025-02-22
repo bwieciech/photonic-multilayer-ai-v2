@@ -2,9 +2,8 @@
 Created based on https://github.com/sbyrnes321/tmm from Steven J. Byrnes
 https://arxiv.org/abs/1603.02720
 """
-import functools
 import sys
-from typing import Callable, Optional, Collection, Dict, Union
+from typing import Optional, Collection, Dict, Union
 
 import numpy as np
 import torch
@@ -23,13 +22,31 @@ def unpolarized_RT_vec(
     Returns {'R': ..., 'T': ...} with the same shape (N, A, W).
     """
     device = torch.device(device)
-    batch_size = 500_000 if device.type == "cuda" else 10_000
+    batch_size = 5_000 if device.type == "cuda" else 100
     # We'll just do two TMM calls (s & p) and average.
-    s_data = coh_tmm_vec("s", n_list, d_list, th_0, wavelengths, batch_size, device)
-    p_data = coh_tmm_vec("p", n_list, d_list, th_0, wavelengths, batch_size, device)
+    s_R = None
+    s_T = None
+    p_R = None
+    p_T = None
 
-    R = 0.5 * (s_data["R"] + p_data["R"])
-    T = 0.5 * (s_data["T"] + p_data["T"])
+    n_rows = n_list.shape[0]
+    for start in range(0, n_rows, batch_size):
+        end = min(start + batch_size, n_rows)
+
+        s_data = coh_tmm_vec(
+            "s", n_list[start:end], d_list[start:end], th_0, wavelengths, device
+        )
+        s_R = s_data["R"] if s_R is None else np.concatenate((s_R, s_data["R"]), axis=0)
+        s_T = s_data["T"] if s_T is None else np.concatenate((s_T, s_data["T"]), axis=0)
+
+        p_data = coh_tmm_vec(
+            "p", n_list[start:end], d_list[start:end], th_0, wavelengths, device
+        )
+        p_R = p_data["R"] if p_R is None else np.concatenate((p_R, p_data["R"]), axis=0)
+        p_T = p_data["T"] if p_T is None else np.concatenate((p_T, p_data["T"]), axis=0)
+
+    R = 0.5 * (s_R + p_R)
+    T = 0.5 * (s_T + p_T)
     return {"R": R, "T": T}
 
 
@@ -39,7 +56,6 @@ def coh_tmm_vec(
     d_list,
     th_0,
     wavelengths,
-    batch_size: int,
     device: Optional[Union[str, torch.device]] = None,
 ):
     """
@@ -85,30 +101,15 @@ def coh_tmm_vec(
     th_0_flat = th_0[A_indices]  # shape: (N1 * W * A,)
     wavelengths_flat = wavelengths[W_indices]  # shape: (N1 * W * A,)
 
-    # Process the (flattened) stacks in batches to limit GPU memory usage.
-    total = n_list.shape[0]
-    R_batches = []
-    T_batches = []
-
-    for start in range(0, total, batch_size):
-        end = min(start + batch_size, total)
-        batch_n = n_list[start:end]
-        batch_d = d_list_flat[start:end]
-        batch_th = th_0_flat[start:end]
-        batch_wl = wavelengths_flat[start:end]
-
-        batch_data = coh_tmm_flattened_stacks(
-            pol, batch_n, batch_d, batch_th, batch_wl, device
-        )
-        # Immediately move the results back to CPU to free GPU memory
-        R_batches.append(batch_data["R"].cpu().detach().numpy())
-        T_batches.append(batch_data["T"].cpu().detach().numpy())
-
-    R_flat = np.concatenate(R_batches, axis=0)
-    T_flat = np.concatenate(T_batches, axis=0)
+    results = coh_tmm_flattened_stacks(
+        pol, n_list, d_list_flat, th_0_flat, wavelengths_flat, device
+    )
 
     # Reshape back to (N1, W, A) so that the output shape is the same as before.
-    return {"R": R_flat.reshape((N1, W, A)), "T": T_flat.reshape((N1, W, A))}
+    return {
+        "R": results["R"].cpu().detach().numpy().reshape((N1, W, A)),
+        "T": results["T"].cpu().detach().numpy().reshape((N1, W, A)),
+    }
 
 
 def calculate_refractive_indices(element, wls, cache):
