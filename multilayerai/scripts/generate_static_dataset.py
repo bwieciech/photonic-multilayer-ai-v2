@@ -3,46 +3,20 @@ import json
 import os.path
 import time
 from collections import Counter
-from dataclasses import dataclass
-from enum import Enum
-from typing import Callable, Optional, Dict, Collection, Tuple, List, Any
+from typing import Callable, Dict, Collection, Tuple, List, Any, Optional
 
 import h5py
 import numpy as np
 import torch.cuda
 from numpy._typing import NDArray
 
+from multilayerai.dataset import MaterialConfiguration, DatasetConfiguration
+from multilayerai.dataset.dataset_type import DatasetType
 from multilayerai.tmm_vectorized.tmm_vectorized import unpolarized_RT_vec
 from multilayerai.utils.refractiveindex_info import RefractiveIndexInfoCsvParser
 
-
-class DatasetType(Enum):
-    TRAIN = 0
-    VALIDATION = 1
-
-
-@dataclass
-class MaterialConfiguration:
-    alias: str
-    refractive_index_function: Callable[[float], complex]
-    has_absorbing_properties: bool
-    thickness_um_lo: float
-    thickness_um_hi: float
-
-
-@dataclass
-class DatasetConfiguration:
-    refractive_indices_dir: str
-    num_materials_lo: int = 2
-    num_materials_hi: int = 5
-    num_layers_lo: int = 2
-    num_layers_hi: int = 20
-    wavelength_um_lo: float = 3
-    wavelength_um_hi: float = 14
-    wavelength_points: int = 10 * (wavelength_um_hi - wavelength_um_lo) + 1
-    num_training_structures: int = 100_000
-    num_validation_structures: int = 10_000
-    random_seed: Optional[int] = 123
+CURR_DIR = os.path.dirname(os.path.abspath(__file__))
+GLASS_ALIAS = "LZOS%20K108"
 
 
 def sample_structure(
@@ -73,9 +47,16 @@ def sample_structure(
     return output_materials, output_refractive_indices, output_thicknesses
 
 
-def pad_with(arr: NDArray[Any], element: Any) -> NDArray[Any]:
-    element_column = np.full((arr.shape[0], 1), element)
-    return np.hstack((element_column, arr, element_column))
+def pad_with(
+    arr: NDArray[Any], l_element: Optional[Any] = None, r_element: Optional[Any] = None
+) -> NDArray[Any]:
+    if l_element is not None:
+        l_element_column = np.full((arr.shape[0], 1), l_element)
+        arr = np.hstack((l_element_column, arr))
+    if r_element is not None:
+        r_element_column = np.full((arr.shape[0], 1), r_element)
+        arr = np.hstack((arr, r_element_column))
+    return arr
 
 
 def create_datasets_if_missing(
@@ -102,13 +83,13 @@ def create_datasets_if_missing(
         "structures_materials",
         (num_rows, 2 + config.num_layers_hi),
         dtype="int8",
-        maxshape=(num_rows, 2 + config.num_layers_hi)
+        maxshape=(num_rows, 2 + config.num_layers_hi),
     )
     file.create_dataset(
         "structures_thicknesses",
         (num_rows, 2 + config.num_layers_hi),
         dtype="float32",
-        maxshape=(num_rows, 2 + config.num_layers_hi)
+        maxshape=(num_rows, 2 + config.num_layers_hi),
     )
     file.create_dataset(
         "num_layers",
@@ -139,13 +120,13 @@ def generate_dataset(
     available_materials_configurations_by_alias: Dict[str, MaterialConfiguration],
     materials_to_indices: Dict[str, int],
     available_materials_aliases: List[str],
-    wavelengths_um: Collection[float]
+    wavelengths_um: Collection[float],
 ) -> None:
     assert (
         "Air" not in available_materials_aliases
     ), "Air should not be sampled from materials as a non-inf layer"
 
-    with h5py.File("dataset.hdf5", "a") as f:
+    with h5py.File(dataset_config.output_path, "a") as f:
         create_datasets_if_missing(
             f, wavelengths_um, dataset_config, materials_to_indices
         )
@@ -168,7 +149,11 @@ def generate_dataset(
             dataset_config.num_materials_hi,
             num_structures,
         )
-        structures_materials, structures_refractive_indices, structures_thicknesses = list(
+        (
+            structures_materials,
+            structures_refractive_indices,
+            structures_thicknesses,
+        ) = list(
             zip(
                 *[
                     sample_structure(
@@ -187,15 +172,22 @@ def generate_dataset(
         )
         structures_materials = pad_with(
             np.array(structures_materials),
-            element=materials_to_indices["Air"],
+            l_element=materials_to_indices["Air"],
+            r_element=materials_to_indices[GLASS_ALIAS],
         )
         structures_refractive_indices = pad_with(
             np.array(structures_refractive_indices),
-            element=available_materials_configurations_by_alias["Air"].refractive_index_function,
+            l_element=available_materials_configurations_by_alias[
+                "Air"
+            ].refractive_index_function,
+            r_element=available_materials_configurations_by_alias[
+                GLASS_ALIAS
+            ].refractive_index_function,
         )
         structures_thicknesses = pad_with(
             np.array(structures_thicknesses),
-            element=np.inf,
+            l_element=np.inf,
+            r_element=np.inf,
         )
         start = time.perf_counter()
         results = unpolarized_RT_vec(
@@ -212,9 +204,9 @@ def generate_dataset(
             (
                 results["R"].squeeze(-1),
                 results["T"].squeeze(-1),
-                1 - results["R"].squeeze(-1) - results["T"].squeeze(-1)
+                1 - results["R"].squeeze(-1) - results["T"].squeeze(-1),
             ),
-            axis=-1
+            axis=-1,
         )
         assert (
             structures_thicknesses.shape[0]
@@ -226,7 +218,7 @@ def generate_dataset(
             f"# RTA rows: {RTA.shape[0]}"
         )
 
-        with h5py.File("dataset.hdf5", "a") as f:
+        with h5py.File(dataset_config.output_path, "a") as f:
             offset = f.attrs["offset"]
             f["structures_materials"][
                 offset : offset + num_structures, : structures_thicknesses.shape[1]
@@ -242,9 +234,11 @@ def generate_dataset(
 
 
 if __name__ == "__main__":
-    dataset_config = DatasetConfiguration(
-        refractive_indices_dir="/home/cupofcoffee/PycharmProjects/photonic-multilayer-ai-v2/assets/refractive_indices"
-    )
+    with open(
+        os.path.join(CURR_DIR, "..", "..", "configuration", "config.json"), "r"
+    ) as f:
+        dataset_config = DatasetConfiguration(**json.load(f))
+
     if dataset_config.random_seed is not None:
         print(f"Seeding np.random with {dataset_config.random_seed}")
         np.random.seed(dataset_config.random_seed)
@@ -252,7 +246,7 @@ if __name__ == "__main__":
     wavelengths_um = np.linspace(
         dataset_config.wavelength_um_lo,
         dataset_config.wavelength_um_hi,
-        dataset_config.wavelength_points
+        dataset_config.wavelength_points,
     )
     available_materials_configurations_by_alias = {
         (alias := file_path.rsplit("/", 1)[1].split("_")[0]): MaterialConfiguration(
@@ -265,14 +259,18 @@ if __name__ == "__main__":
                     parser.function(wavelengths_um).imag, 0
                 )
             ),
-            thickness_um_lo=0.005 if has_absorbing_properties else 0.05,
-            thickness_um_hi=0.05 if has_absorbing_properties else 1.0,
+            thickness_um_lo=0.01,
+            thickness_um_hi=0.50,
         )
         for file_path in glob.glob(
             os.path.join(dataset_config.refractive_indices_dir, "*.csv")
         )
     }
-    available_materials_aliases = list(available_materials_configurations_by_alias.keys())
+    available_materials_aliases = [
+        m
+        for m in available_materials_configurations_by_alias.keys()
+        if m != GLASS_ALIAS
+    ]
     available_materials_configurations_by_alias["Air"] = MaterialConfiguration(
         "Air",
         lambda wl: 1.00027,

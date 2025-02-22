@@ -13,11 +13,7 @@ EPSILON = sys.float_info.epsilon  # typical floating-point calc error
 
 
 def unpolarized_RT_vec(
-    n_list,
-    d_list,
-    th_0,
-    wavelengths,
-    device: Optional[Union[str, torch.device]] = None
+    n_list, d_list, th_0, wavelengths, device: Optional[Union[str, torch.device]] = None
 ):
     """
     Vectorized unpolarized RT over:
@@ -63,9 +59,7 @@ def coh_tmm_vec(
         d_list = d_list[np.newaxis, :]  # shape => (1,L)
 
     th_0 = np.array(th_0, copy=False, ndmin=1)  # shape => (A,)
-    wavelengths = np.array(
-        wavelengths, copy=False, ndmin=1
-    )  # shape => (W,)
+    wavelengths = np.array(wavelengths, copy=False, ndmin=1)  # shape => (W,)
 
     N1, L = n_list.shape
     W = wavelengths.size
@@ -103,7 +97,9 @@ def coh_tmm_vec(
         batch_th = th_0_flat[start:end]
         batch_wl = wavelengths_flat[start:end]
 
-        batch_data = coh_tmm_flattened_stacks(pol, batch_n, batch_d, batch_th, batch_wl, device)
+        batch_data = coh_tmm_flattened_stacks(
+            pol, batch_n, batch_d, batch_th, batch_wl, device
+        )
         # Immediately move the results back to CPU to free GPU memory
         R_batches.append(batch_data["R"].cpu().detach().numpy())
         T_batches.append(batch_data["T"].cpu().detach().numpy())
@@ -209,9 +205,13 @@ def interface_t(polarization, n_i, n_f, th_i, th_f):
     Returns shape (N,) complex.
     """
     if polarization == "s":
-        return 2 * n_i * torch.cos(th_i) / (n_i * torch.cos(th_i) + n_f * torch.cos(th_f))
+        return (
+            2 * n_i * torch.cos(th_i) / (n_i * torch.cos(th_i) + n_f * torch.cos(th_f))
+        )
     elif polarization == "p":
-        return 2 * n_i * torch.cos(th_i) / (n_f * torch.cos(th_i) + n_i * torch.cos(th_f))
+        return (
+            2 * n_i * torch.cos(th_i) / (n_f * torch.cos(th_i) + n_i * torch.cos(th_f))
+        )
     else:
         raise ValueError("polarization must be 's' or 'p'")
 
@@ -228,9 +228,17 @@ def T_from_t(pol, t, n_i, n_f, th_i, th_f):
     For p-pol:  T = |t|^2 * Re[n_f cos(th_f*)]/Re[n_i cos(th_i*)]
     """
     if pol == "s":
-        return (torch.abs(t) ** 2) * (n_f * torch.cos(th_f)).real / ((n_i * torch.cos(th_i)).real + EPSILON)
+        return (
+            (torch.abs(t) ** 2)
+            * (n_f * torch.cos(th_f)).real
+            / ((n_i * torch.cos(th_i)).real + EPSILON)
+        )
     elif pol == "p":
-        return (torch.abs(t) ** 2) * ((n_f * torch.conj(torch.cos(th_f))).real) / ((n_i * torch.conj(torch.cos(th_i))).real + EPSILON)
+        return (
+            (torch.abs(t) ** 2)
+            * ((n_f * torch.conj(torch.cos(th_f))).real)
+            / ((n_i * torch.conj(torch.cos(th_i))).real + EPSILON)
+        )
     else:
         raise ValueError("polarization must be 's' or 'p'")
 
@@ -271,9 +279,15 @@ def coh_tmm_flattened_stacks(
         wavelengths: shape (N,) [vacuum wavelength]
         device: torch device
     """
-    n_list = torch.tensor(n_list, dtype=torch.cdouble, requires_grad=False, device=device)
-    d_list = torch.tensor(d_list, dtype=torch.float64, requires_grad=False, device=device)
-    wavelengths = torch.tensor(wavelengths, dtype=torch.float64, requires_grad=False, device=device)
+    n_list = torch.tensor(
+        n_list, dtype=torch.cdouble, requires_grad=False, device=device
+    )
+    d_list = torch.tensor(
+        d_list, dtype=torch.float64, requires_grad=False, device=device
+    )
+    wavelengths = torch.tensor(
+        wavelengths, dtype=torch.float64, requires_grad=False, device=device
+    )
     th_0 = torch.tensor(th_0, dtype=torch.float64, requires_grad=False, device=device)
 
     if torch.any(~torch.isinf(d_list[:, 0])) or torch.any(~torch.isinf(d_list[:, -1])):
@@ -298,16 +312,26 @@ def coh_tmm_flattened_stacks(
     imag_part = torch.where(big_abs_mask, 35, delta.imag)
     delta = real_part + 1j * imag_part
 
-    r_list = torch.zeros((num_stacks, num_layers, num_layers), dtype=torch.cdouble, device=device)
-    t_list = torch.zeros((num_stacks, num_layers, num_layers), dtype=torch.cdouble, device=device)
-    r_ij = interface_r(pol, n_list[:, :-1], n_list[:, 1:], th_list[:, :-1], th_list[:, 1:])
-    t_ij = interface_t(pol, n_list[:, :-1], n_list[:, 1:], th_list[:, :-1], th_list[:, 1:])
+    r_list = torch.zeros(
+        (num_stacks, num_layers, num_layers), dtype=torch.cdouble, device=device
+    )
+    t_list = torch.zeros(
+        (num_stacks, num_layers, num_layers), dtype=torch.cdouble, device=device
+    )
+    r_ij = interface_r(
+        pol, n_list[:, :-1], n_list[:, 1:], th_list[:, :-1], th_list[:, 1:]
+    )
+    t_ij = interface_t(
+        pol, n_list[:, :-1], n_list[:, 1:], th_list[:, :-1], th_list[:, 1:]
+    )
     idx_i = torch.arange(num_layers - 1)
     idx_ip1 = idx_i + 1
     r_list[:, idx_i, idx_ip1] = r_ij
     t_list[:, idx_i, idx_ip1] = t_ij
 
-    M_list = torch.zeros((num_stacks, num_layers, 2, 2), dtype=torch.cdouble, device=device)
+    M_list = torch.zeros(
+        (num_stacks, num_layers, 2, 2), dtype=torch.cdouble, device=device
+    )
     for i in range(1, num_layers - 1):
         t_factor = 1.0 / t_list[:, i, i + 1].unsqueeze(-1).unsqueeze(-1)
         exp_matrix = make_2x2_array(
@@ -344,7 +368,9 @@ def coh_tmm_flattened_stacks(
     r_amp = Mtilde[:, 1, 0] / Mtilde[:, 0, 0]
     t_amp = 1.0 / Mtilde[:, 0, 0]
 
-    vw_list = torch.zeros((num_stacks, num_layers, 2), dtype=torch.cdouble, device=device)
+    vw_list = torch.zeros(
+        (num_stacks, num_layers, 2), dtype=torch.cdouble, device=device
+    )
     vw = torch.zeros((num_stacks, 2), dtype=torch.cdouble, device=device)
     vw[:, 0] = t_amp
     vw_list[:, -1, :] = vw
