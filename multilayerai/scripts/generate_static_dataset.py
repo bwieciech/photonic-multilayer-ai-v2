@@ -140,13 +140,13 @@ def generate_dataset(
     print(f"Generating {num_structures} rows for the {dataset_type.name} dataset")
     structure_counts_by_num_layers = Counter(
         np.random.randint(
-            dataset_config.num_layers_lo, dataset_config.num_layers_hi, num_structures
+            dataset_config.num_layers_lo, dataset_config.num_layers_hi + 1, num_structures
         )
     )
     for num_layers, num_structures in structure_counts_by_num_layers.items():
         num_materials = np.random.randint(
             dataset_config.num_materials_lo,
-            dataset_config.num_materials_hi,
+            dataset_config.num_materials_hi + 1,
             num_structures,
         )
         (
