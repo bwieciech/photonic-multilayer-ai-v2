@@ -1,0 +1,14 @@
+{
+  "refractive_indices_dir": null,
+  "output_path": null,
+  "num_materials_lo": 2,
+  "num_materials_hi": 5,
+  "num_layers_lo": 2,
+  "num_layers_hi": 20,
+  "wavelength_um_lo": 3,
+  "wavelength_um_hi": 14,
+  "wavelength_points": 111,
+  "num_training_structures": 10000,
+  "num_validation_structures": 1000,
+  "random_seed": 123
+}

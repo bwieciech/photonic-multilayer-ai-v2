@@ -14,6 +14,12 @@ class RTADataset(Dataset):
     def __init__(self, dataset_path: str, dataset_type: Optional[DatasetType] = None):
         self._dataset_path = dataset_path
         self._reader = h5py.File(dataset_path, "r")
+        self._max_seq_length = self._reader["structures_materials"].shape[1] - 2
+        self._materials_to_indices = {
+            k: int(v)
+            for k, v in json.loads(self._reader.attrs["materials_to_indices"]).items()
+        }
+        self._padding_idx = len(self._materials_to_indices)
         offset = self._reader.attrs["offset"]
         if dataset_type is not None:
             dataset_type_index = json.loads(
@@ -30,16 +36,33 @@ class RTADataset(Dataset):
     def __getitem__(
         self, i: int
     ) -> Tuple[NDArray[int], NDArray[float], int, NDArray[float]]:
-        materials = self._reader["structures_materials"][i]
-        thicknesses = self._reader["structures_thicknesses"][i]
-        num_layers = self._reader["num_layers"][i] + 2
+        num_layers = self._reader["num_layers"][i]
+        materials = np.concatenate(
+            (
+                self._reader["structures_materials"][i, 1 : 1 + num_layers],
+                np.full(self._max_seq_length - num_layers, self.padding_idx),
+            )
+        )
+        thicknesses = np.concatenate(
+            (
+                self._reader["structures_thicknesses"][i, 1 : 1 + num_layers],
+                np.zeros(self._max_seq_length - num_layers),
+            )
+        )
         RTA = self._reader["RTA"][i]
         return materials, thicknesses, num_layers, RTA
 
     @property
-    @cache
     def wavelengths_um(self):
         return self._reader.attrs["wavelengths_um"]
+
+    @property
+    def num_materials(self):
+        return len(self._materials_to_indices)
+
+    @property
+    def padding_idx(self):
+        return self._padding_idx
 
     def __len__(self) -> int:
         return self._num_rows

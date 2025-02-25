@@ -10,7 +10,8 @@ import numpy as np
 import torch.cuda
 from numpy._typing import NDArray
 
-from multilayerai.dataset import MaterialConfiguration, DatasetConfiguration
+from multilayerai.configuration import DatasetConfiguration
+from multilayerai.configuration.dataset_configuration import MaterialConfiguration
 from multilayerai.dataset.dataset_type import DatasetType
 from multilayerai.tmm_vectorized.tmm_vectorized import unpolarized_RT_vec
 from multilayerai.utils.refractiveindex_info import RefractiveIndexInfoCsvParser
@@ -140,7 +141,9 @@ def generate_dataset(
     print(f"Generating {num_structures} rows for the {dataset_type.name} dataset")
     structure_counts_by_num_layers = Counter(
         np.random.randint(
-            dataset_config.num_layers_lo, dataset_config.num_layers_hi + 1, num_structures
+            dataset_config.num_layers_lo,
+            dataset_config.num_layers_hi + 1,
+            num_structures,
         )
     )
     for num_layers, num_structures in structure_counts_by_num_layers.items():
@@ -235,7 +238,10 @@ def generate_dataset(
 
 if __name__ == "__main__":
     with open(
-        os.path.join(CURR_DIR, "..", "..", "configuration", "config.json"), "r"
+        os.path.join(
+            CURR_DIR, "..", "..", "configuration", "dataset_configuration.json"
+        ),
+        "r",
     ) as f:
         dataset_config = DatasetConfiguration(**json.load(f))
 

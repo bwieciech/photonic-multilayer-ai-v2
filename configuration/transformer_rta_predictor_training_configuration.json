@@ -1,0 +1,13 @@
+{
+  "dataset_path": null,
+  "output_path": null,
+  "embedding_size": 128,
+  "ff_hidden_dim": 512,
+  "num_heads": 8,
+  "num_encoder_blocks": 1,
+  "dropout_rate": 0.0,
+  "num_epochs": 64,
+  "batch_size": 64,
+  "learning_rate": 0.00001,
+  "weight_decay": 0.01
+}
