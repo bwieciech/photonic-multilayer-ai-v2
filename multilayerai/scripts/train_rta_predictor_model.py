@@ -27,6 +27,7 @@ def train_model(
     batch_size: int,
     learning_rate: float,
     weight_decay: float,
+    early_stopping_epochs_threshold: int,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
 ):
     model = model.to(device)
@@ -46,6 +47,7 @@ def train_model(
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0.0
+        no_improvement_epochs = 0
         for materials, thicknesses, num_layers, rta in tqdm.tqdm(
             train_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Train"
         ):
@@ -92,12 +94,17 @@ def train_model(
         print("=" * len(header))
 
         if val_loss < best_val_loss:
+            no_improvement_epochs = 0
             best_val_loss = val_loss
             torch.save(
                 model.state_dict(),
                 os.path.join(output_path, "best_transformer_rta.pth"),
             )
             print(f"Saved best model with val Loss: {best_val_loss:.6f}")
+        else:
+            no_improvement_epochs += 1
+            if no_improvement_epochs > early_stopping_epochs_threshold:
+                print(f"No validation loss improvement for {no_improvement_epochs} epochs, finishing training job.")
 
         # Save metrics
         with open(os.path.join(output_path, "metrics.json"), "w") as f:
@@ -147,4 +154,5 @@ if __name__ == "__main__":
         batch_size=model_training_config.batch_size,
         learning_rate=model_training_config.learning_rate,
         weight_decay=model_training_config.weight_decay,
+        early_stopping_epochs_threshold=model_training_config.early_stopping_epochs_threshold,
     )

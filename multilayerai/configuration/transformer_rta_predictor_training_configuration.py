@@ -14,3 +14,4 @@ class TransformerRTAPredictorTrainingConfiguration:
     batch_size: int = 128
     learning_rate: float = 1e-5
     weight_decay: float = 0.1
+    early_stopping_epochs_threshold: int = 3
