@@ -60,61 +60,6 @@ def pad_with(
     return arr
 
 
-def create_datasets_if_missing(
-    file: h5py.File,
-    wavelengths_um: List[float],
-    config: DatasetConfiguration,
-    materials_to_indices: Dict[str, int],
-) -> None:
-    if file.attrs.get("initialized", False):
-        return
-    file.attrs["wavelengths_um"] = wavelengths_um
-    file.attrs["materials_to_indices"] = json.dumps(materials_to_indices)
-    file.attrs["indices_to_materials"] = json.dumps(
-        {v: k for k, v in materials_to_indices.items()}
-    )
-    file.attrs["dataset_type_to_index"] = json.dumps(
-        {it.name: it.value for it in DatasetType}
-    )
-
-    num_rows = config.num_training_structures + config.num_validation_structures
-    print(f"Rows to generate: {num_rows}")
-
-    file.create_dataset(
-        "structures_materials",
-        (num_rows, 2 + config.num_layers_hi),
-        dtype="int8",
-        maxshape=(num_rows, 2 + config.num_layers_hi),
-    )
-    file.create_dataset(
-        "structures_thicknesses",
-        (num_rows, 2 + config.num_layers_hi),
-        dtype="float32",
-        maxshape=(num_rows, 2 + config.num_layers_hi),
-    )
-    file.create_dataset(
-        "num_layers",
-        (num_rows,),
-        dtype="int8",
-        maxshape=(num_rows,),
-    )
-    file.create_dataset(
-        "RTA",
-        (num_rows, len(wavelengths_um), 3),
-        dtype="float32",
-        maxshape=(num_rows, len(wavelengths_um), 3),
-    )
-    file.create_dataset(
-        "dataset_type",
-        (num_rows,),
-        dtype="int8",
-        maxshape=(num_rows,),
-    )
-
-    file.attrs["offset"] = 0
-    file.attrs["initialized"] = True
-
-
 def generate_dataset(
     dataset_type: DatasetType,
     dataset_config: DatasetConfiguration,
@@ -127,8 +72,8 @@ def generate_dataset(
         "Air" not in available_materials_aliases
     ), "Air should not be sampled from materials as a non-inf layer"
 
-    with h5py.File(dataset_config.output_path, "a") as f:
-        create_datasets_if_missing(
+    with h5py.File(os.path.join(dataset_config.output_dir, "dataset.hdf5"), "a") as f:
+        create_dataset_file_if_missing(
             f, wavelengths_um, dataset_config, materials_to_indices
         )
     if dataset_type == DatasetType.TRAIN:
@@ -200,9 +145,6 @@ def generate_dataset(
             wavelengths_um,
             device="cuda" if torch.cuda.is_available() else "cpu",
         )
-        print(
-            f"---> {num_structures} structures with {num_layers} layers: {int(time.perf_counter() - start)}s"
-        )
         RTA = np.stack(
             (
                 results["R"].squeeze(-1),
@@ -211,29 +153,112 @@ def generate_dataset(
             ),
             axis=-1,
         )
-        assert (
-            structures_thicknesses.shape[0]
-            == structures_refractive_indices.shape[0]
-            == RTA.shape[0]
-        ), (
-            f"# structures_thicknesses rows: {structures_thicknesses.shape[0]}, "
-            f"# structures_refractive_indices rows: {structures_refractive_indices.shape[0]}, "
-            f"# RTA rows: {RTA.shape[0]}"
+        with h5py.File(
+            os.path.join(dataset_config.output_dir, "dataset.hdf5"), "a"
+        ) as f:
+            write_data(
+                f,
+                num_layers,
+                len(wavelengths_um),
+                dataset_type,
+                structures_materials,
+                structures_thicknesses,
+                RTA,
+            )
+        print(
+            f"---> {num_structures} structures with {num_layers} layers: {int(time.perf_counter() - start)}s"
         )
 
-        with h5py.File(dataset_config.output_path, "a") as f:
-            offset = f.attrs["offset"]
-            f["structures_materials"][
-                offset : offset + num_structures, : structures_thicknesses.shape[1]
-            ] = structures_materials
-            f["structures_thicknesses"][
-                offset : offset + num_structures, : structures_thicknesses.shape[1]
-            ] = structures_thicknesses
-            f["num_layers"][offset : offset + num_structures] = num_layers
-            f["RTA"][offset : offset + num_structures] = RTA
-            f["dataset_type"][offset : offset + num_structures] = dataset_type.value
 
-            f.attrs["offset"] += num_structures
+def create_dataset_file_if_missing(
+    file: h5py.File,
+    wavelengths_um: List[float],
+    config: DatasetConfiguration,
+    materials_to_indices: Dict[str, int],
+) -> None:
+    if file.attrs.get("initialized", False):
+        return
+    file.attrs["wavelengths_um"] = wavelengths_um
+    file.attrs["materials_to_indices"] = json.dumps(materials_to_indices)
+    file.attrs["indices_to_materials"] = json.dumps(
+        {v: k for k, v in materials_to_indices.items()}
+    )
+    file.attrs["dataset_type_to_index"] = json.dumps(
+        {it.name: it.value for it in DatasetType}
+    )
+    file.attrs["max_layers"] = config.num_layers_hi
+    file.attrs["num_rows"] = 0
+    for dataset_type in DatasetType:
+        file.create_group(dataset_type.name)
+        file[dataset_type.name].attrs["num_rows"] = 0
+
+    num_rows = config.num_training_structures + config.num_validation_structures
+    print(f"Rows to generate: {num_rows}")
+    file.attrs["initialized"] = True
+
+
+def write_data(
+    file: h5py.File,
+    num_layers: int,
+    num_wavelengths: int,
+    dataset_type: DatasetType,
+    structures_materials: NDArray[int],
+    structures_thicknesses: NDArray[float],
+    RTA: NDArray[float],
+) -> None:
+    assert (
+        structures_thicknesses.shape[0] == structures_materials.shape[0] == RTA.shape[0]
+    ), (
+        f"# structures_thicknesses rows: {structures_thicknesses.shape[0]}, "
+        f"# structures_refractive_indices rows: {structures_materials.shape[0]}, "
+        f"# RTA rows: {RTA.shape[0]}"
+    )
+    num_rows, num_cols = structures_materials.shape
+    num_materials = num_cols - 2
+
+    num_materials_group = file[dataset_type.name].create_group(
+        f"num_layers={num_materials}"
+    )
+    num_materials_group.create_dataset(
+        "structures_materials",
+        (num_rows, num_cols),
+        dtype="int8",
+        maxshape=(num_rows, num_cols),
+    )
+    num_materials_group.create_dataset(
+        "structures_thicknesses",
+        (num_rows, num_cols),
+        dtype="float32",
+        maxshape=(num_rows, num_cols),
+    )
+    num_materials_group.create_dataset(
+        "num_layers",
+        (num_rows,),
+        dtype="int8",
+        maxshape=(num_rows,),
+    )
+    num_materials_group.create_dataset(
+        "RTA",
+        (num_rows, num_wavelengths, 3),
+        dtype="float32",
+        maxshape=(num_rows, num_wavelengths, 3),
+    )
+    num_materials_group.create_dataset(
+        "dataset_type",
+        (num_rows,),
+        dtype="int8",
+        maxshape=(num_rows,),
+    )
+
+    num_materials_group["structures_materials"][:] = structures_materials
+    num_materials_group["structures_thicknesses"][:] = structures_thicknesses
+    num_materials_group["num_layers"][:] = num_layers
+    num_materials_group["RTA"][:] = RTA
+    num_materials_group["dataset_type"][:] = dataset_type.value
+
+    num_materials_group.attrs["num_rows"] = num_rows
+    file[dataset_type.name].attrs["num_rows"] += num_rows
+    file.attrs["num_rows"] += num_rows
 
 
 if __name__ == "__main__":

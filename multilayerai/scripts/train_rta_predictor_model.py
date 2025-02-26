@@ -104,7 +104,9 @@ def train_model(
         else:
             no_improvement_epochs += 1
             if no_improvement_epochs > early_stopping_epochs_threshold:
-                print(f"No validation loss improvement for {no_improvement_epochs} epochs, finishing training job.")
+                print(
+                    f"No validation loss improvement for {no_improvement_epochs} epochs, finishing training job."
+                )
 
         # Save metrics
         with open(os.path.join(output_path, "metrics.json"), "w") as f:

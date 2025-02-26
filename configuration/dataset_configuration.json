@@ -1,6 +1,6 @@
 {
   "refractive_indices_dir": null,
-  "output_path": null,
+  "output_dir": null,
   "num_materials_lo": 2,
   "num_materials_hi": 5,
   "num_layers_lo": 2,

@@ -14,7 +14,7 @@ class MaterialConfiguration:
 @dataclass
 class DatasetConfiguration:
     refractive_indices_dir: str
-    output_path: str
+    output_dir: str
     num_materials_lo: int = 2
     num_materials_hi: int = 5
     num_layers_lo: int = 2
