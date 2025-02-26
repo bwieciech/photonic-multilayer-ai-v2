@@ -92,79 +92,87 @@ def generate_dataset(
         )
     )
     for num_layers, num_structures in structure_counts_by_num_layers.items():
-        num_materials = np.random.randint(
-            dataset_config.num_materials_lo,
-            dataset_config.num_materials_hi + 1,
-            num_structures,
-        )
-        (
-            structures_materials,
-            structures_refractive_indices,
-            structures_thicknesses,
-        ) = list(
-            zip(
-                *[
-                    sample_structure(
-                        available_materials_configurations_by_alias,
-                        materials_to_indices,
-                        np.random.choice(
-                            available_materials_aliases,
-                            num_materials_example,
-                            replace=False,
-                        ),
-                        num_layers,
-                    )
-                    for num_materials_example in num_materials
-                ]
+        num_chunks = int(np.ceil(num_structures / dataset_config.max_chunk_size))
+        for chunk_idx in range(num_chunks):
+            chunk_start = chunk_idx * dataset_config.max_chunk_size
+            chunk_end = min(
+                (chunk_idx + 1) * dataset_config.max_chunk_size, num_structures
             )
-        )
-        structures_materials = pad_with(
-            np.array(structures_materials),
-            l_element=materials_to_indices["Air"],
-            r_element=materials_to_indices[GLASS_ALIAS],
-        )
-        structures_refractive_indices = pad_with(
-            np.array(structures_refractive_indices),
-            l_element=available_materials_configurations_by_alias[
-                "Air"
-            ].refractive_index_function,
-            r_element=available_materials_configurations_by_alias[
-                GLASS_ALIAS
-            ].refractive_index_function,
-        )
-        structures_thicknesses = pad_with(
-            np.array(structures_thicknesses),
-            l_element=np.inf,
-            r_element=np.inf,
-        )
-        start = time.perf_counter()
-        results = unpolarized_RT_vec(
-            structures_refractive_indices,
-            structures_thicknesses,
-            0,
-            wavelengths_um,
-            device="cuda" if torch.cuda.is_available() else "cpu",
-        )
-        RTA = np.stack(
+            chunk_length = chunk_end - chunk_start
+            num_materials = np.random.randint(
+                dataset_config.num_materials_lo,
+                dataset_config.num_materials_hi + 1,
+                chunk_length,
+            )
             (
-                results["R"].squeeze(-1),
-                results["T"].squeeze(-1),
-                1 - results["R"].squeeze(-1) - results["T"].squeeze(-1),
-            ),
-            axis=-1,
-        )
-        with h5py.File(
-            os.path.join(dataset_config.output_dir, "dataset.hdf5"), "a"
-        ) as f:
-            write_data(
-                f,
-                num_layers,
-                len(wavelengths_um),
-                dataset_type,
                 structures_materials,
+                structures_refractive_indices,
                 structures_thicknesses,
-                RTA,
+            ) = list(
+                zip(
+                    *[
+                        sample_structure(
+                            available_materials_configurations_by_alias,
+                            materials_to_indices,
+                            np.random.choice(
+                                available_materials_aliases,
+                                num_materials_example,
+                                replace=False,
+                            ),
+                            num_layers,
+                        )
+                        for num_materials_example in num_materials
+                    ]
+                )
             )
+            structures_materials = pad_with(
+                np.array(structures_materials),
+                l_element=materials_to_indices["Air"],
+                r_element=materials_to_indices[GLASS_ALIAS],
+            )
+            structures_refractive_indices = pad_with(
+                np.array(structures_refractive_indices),
+                l_element=available_materials_configurations_by_alias[
+                    "Air"
+                ].refractive_index_function,
+                r_element=available_materials_configurations_by_alias[
+                    GLASS_ALIAS
+                ].refractive_index_function,
+            )
+            structures_thicknesses = pad_with(
+                np.array(structures_thicknesses),
+                l_element=np.inf,
+                r_element=np.inf,
+            )
+            start = time.perf_counter()
+            results = unpolarized_RT_vec(
+                structures_refractive_indices,
+                structures_thicknesses,
+                0,
+                wavelengths_um,
+                device="cuda" if torch.cuda.is_available() else "cpu",
+            )
+            RTA = np.stack(
+                (
+                    results["R"].squeeze(-1),
+                    results["T"].squeeze(-1),
+                    1 - results["R"].squeeze(-1) - results["T"].squeeze(-1),
+                ),
+                axis=-1,
+            )
+            with h5py.File(
+                os.path.join(dataset_config.output_dir, "dataset.hdf5"), "a"
+            ) as f:
+                write_data(
+                    f,
+                    num_layers,
+                    chunk_idx,
+                    len(wavelengths_um),
+                    dataset_type,
+                    structures_materials,
+                    structures_thicknesses,
+                    RTA,
+                )
         print(
             f"---> {num_structures} structures with {num_layers} layers: {int(time.perf_counter() - start)}s"
         )
@@ -200,6 +208,7 @@ def create_dataset_file_if_missing(
 def write_data(
     file: h5py.File,
     num_layers: int,
+    chunk_idx: int,
     num_wavelengths: int,
     dataset_type: DatasetType,
     structures_materials: NDArray[int],
@@ -216,47 +225,53 @@ def write_data(
     num_rows, num_cols = structures_materials.shape
     num_materials = num_cols - 2
 
-    num_materials_group = file[dataset_type.name].create_group(
-        f"num_layers={num_materials}"
-    )
-    num_materials_group.create_dataset(
+    num_materials_group_key = f"num_layers={num_materials}"
+    if num_materials_group_key not in file[dataset_type.name]:
+        num_materials_group = file[dataset_type.name].create_group(
+            num_materials_group_key
+        )
+    else:
+        num_materials_group = file[dataset_type.name][num_materials_group_key]
+    chunk_group = num_materials_group.create_group(f"chunk_idx={chunk_idx}")
+
+    chunk_group.create_dataset(
         "structures_materials",
         (num_rows, num_cols),
         dtype="int8",
         maxshape=(num_rows, num_cols),
     )
-    num_materials_group.create_dataset(
+    chunk_group.create_dataset(
         "structures_thicknesses",
         (num_rows, num_cols),
         dtype="float32",
         maxshape=(num_rows, num_cols),
     )
-    num_materials_group.create_dataset(
+    chunk_group.create_dataset(
         "num_layers",
         (num_rows,),
         dtype="int8",
         maxshape=(num_rows,),
     )
-    num_materials_group.create_dataset(
+    chunk_group.create_dataset(
         "RTA",
         (num_rows, num_wavelengths, 3),
         dtype="float32",
         maxshape=(num_rows, num_wavelengths, 3),
     )
-    num_materials_group.create_dataset(
+    chunk_group.create_dataset(
         "dataset_type",
         (num_rows,),
         dtype="int8",
         maxshape=(num_rows,),
     )
 
-    num_materials_group["structures_materials"][:] = structures_materials
-    num_materials_group["structures_thicknesses"][:] = structures_thicknesses
-    num_materials_group["num_layers"][:] = num_layers
-    num_materials_group["RTA"][:] = RTA
-    num_materials_group["dataset_type"][:] = dataset_type.value
+    chunk_group["structures_materials"][:] = structures_materials
+    chunk_group["structures_thicknesses"][:] = structures_thicknesses
+    chunk_group["num_layers"][:] = num_layers
+    chunk_group["RTA"][:] = RTA
+    chunk_group["dataset_type"][:] = dataset_type.value
 
-    num_materials_group.attrs["num_rows"] = num_rows
+    chunk_group.attrs["num_rows"] = num_rows
     file[dataset_type.name].attrs["num_rows"] += num_rows
     file.attrs["num_rows"] += num_rows
 

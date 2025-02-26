@@ -36,9 +36,10 @@ class RTADataset(Dataset):
         (
             dataset_type_key,
             num_layers_key,
+            chunk_idx_key,
         ), relative_index = self._get_key_and_relative_index(index)
         num_layers = int(num_layers_key.removeprefix("num_layers="))
-        group_reader = self._reader[dataset_type_key][num_layers_key]
+        group_reader = self._reader[dataset_type_key][num_layers_key][chunk_idx_key]
         materials = np.concatenate(
             (
                 group_reader["structures_materials"][relative_index, 1:-1],
@@ -88,10 +89,13 @@ class RTADataset(Dataset):
         for dataset_type in dataset_types:
             dataset_key = dataset_type.name
             for num_layers_key in self._reader[dataset_key]:
-                start_indices.append(running_mapping_start)
-                keys.append((dataset_key, num_layers_key))
-                num_rows = self._reader[dataset_key][num_layers_key].attrs["num_rows"]
-                running_mapping_start += num_rows
+                for chunk_idx_key in self._reader[dataset_key][num_layers_key]:
+                    start_indices.append(running_mapping_start)
+                    keys.append((dataset_key, num_layers_key, chunk_idx_key))
+                    num_rows = self._reader[dataset_key][num_layers_key][
+                        chunk_idx_key
+                    ].attrs["num_rows"]
+                    running_mapping_start += num_rows
 
         return start_indices, keys
 
