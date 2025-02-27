@@ -1,6 +1,8 @@
 import math
+from typing import Any, Callable
 
 import torch
+from black.trans import defaultdict
 from torch import nn
 
 from multilayerai.model.transformer.blocks.encoder import EncoderBlock
@@ -18,6 +20,7 @@ class TransformerRTAPredictor(nn.Module):
         num_wavelengths: int,
         dropout_rate: float = 0.1,
         max_seq_len: int = 32,
+        cache: bool = False,
     ):
         super().__init__()
 
@@ -51,10 +54,17 @@ class TransformerRTAPredictor(nn.Module):
             ),  # Predict R, T, A for each wavelength
         )
         self._dropout = torch.nn.Dropout(dropout_rate)
+        self._cache = cache
+        if cache:
+            self._cached_values = defaultdict(dict)
+            self._register_hooks()
 
     def forward(
         self, materials: torch.Tensor, thicknesses: torch.Tensor
     ) -> torch.Tensor:
+        if self._cache:
+            self._cached_values = defaultdict(dict)
+
         batch_size, seq_len = materials.shape
         input_padding_arr = torch.where(
             materials == self._padding_token_idx, -torch.inf, 0
@@ -98,3 +108,15 @@ class TransformerRTAPredictor(nn.Module):
     def _create_padding_mask(self, arr: torch.Tensor) -> torch.Tensor:
         mask = arr.unsqueeze(1).expand(-1, arr.size(1), -1)
         return torch.repeat_interleave(mask, self._num_heads, dim=0)
+
+    def _register_hooks(self) -> None:
+        def get_hook(module_name: str) -> Callable[[torch.nn.Module, Any, Any], None]:
+            def hook_fn(module: torch.nn.Module, input: torch.Tensor, output: Any) -> None:
+                self._cached_values["outputs"][module_name] = output
+            return hook_fn
+
+        named_modules = dict(self.named_modules())
+        for module_name, module in self.named_modules():
+            if not module_name:
+                continue
+            module.register_forward_hook(get_hook(module_name))
