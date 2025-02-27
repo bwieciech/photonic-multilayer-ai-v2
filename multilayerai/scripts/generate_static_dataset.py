@@ -3,7 +3,7 @@ import json
 import os.path
 import time
 from collections import Counter
-from typing import Callable, Dict, Collection, Tuple, List, Any, Optional
+from typing import Callable, Dict, Collection, Tuple, List
 
 import h5py
 import numpy as np
@@ -14,6 +14,7 @@ from multilayerai.configuration import DatasetConfiguration
 from multilayerai.configuration.dataset_configuration import MaterialConfiguration
 from multilayerai.dataset.dataset_type import DatasetType
 from multilayerai.tmm_vectorized.tmm_vectorized import unpolarized_RT_vec
+from multilayerai.utils.padding import pad_with
 from multilayerai.utils.refractiveindex_info import RefractiveIndexInfoCsvParser
 
 CURR_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -46,18 +47,6 @@ def sample_structure(
         output_thicknesses.append(thickness)
         prev_material = material
     return output_materials, output_refractive_indices, output_thicknesses
-
-
-def pad_with(
-    arr: NDArray[Any], l_element: Optional[Any] = None, r_element: Optional[Any] = None
-) -> NDArray[Any]:
-    if l_element is not None:
-        l_element_column = np.full((arr.shape[0], 1), l_element)
-        arr = np.hstack((l_element_column, arr))
-    if r_element is not None:
-        r_element_column = np.full((arr.shape[0], 1), r_element)
-        arr = np.hstack((arr, r_element_column))
-    return arr
 
 
 def generate_dataset(

@@ -44,10 +44,10 @@ def train_model(
     validation_losses = defaultdict(list)
 
     # Training
+    no_improvement_epochs = 0
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0.0
-        no_improvement_epochs = 0
         for materials, thicknesses, num_layers, rta in tqdm.tqdm(
             train_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Train"
         ):
@@ -138,9 +138,9 @@ if __name__ == "__main__":
     val_dataset = RTADataset(model_training_config.dataset_path, DatasetType.VALIDATION)
 
     model = TransformerRTAPredictor(
-        num_materials=train_dataset.num_materials,
+        num_tokens=train_dataset.num_tokens,
         embedding_size=model_training_config.embedding_size,
-        padding_token_idx=train_dataset.num_materials,
+        padding_token_idx=train_dataset.padding_idx,
         num_heads=model_training_config.num_heads,
         ff_hidden_dim=model_training_config.ff_hidden_dim,
         num_encoder_blocks=model_training_config.num_encoder_blocks,

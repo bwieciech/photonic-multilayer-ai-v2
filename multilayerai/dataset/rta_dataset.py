@@ -8,18 +8,21 @@ from numpy._typing import NDArray
 from torch.utils.data import Dataset
 
 from multilayerai.dataset import DatasetType
+from multilayerai.utils.padding import pad_with
 
 
 class RTADataset(Dataset):
     def __init__(self, dataset_path: str, dataset_type: Optional[DatasetType] = None):
         self._dataset_path = dataset_path
         self._reader = h5py.File(dataset_path, "r")
-        self._max_layers = self._reader.attrs["max_layers"]
+        self._max_layers = self._reader.attrs["max_layers"]  # +2 for the inf layers
         self._materials_to_indices = {
             k: int(v)
             for k, v in json.loads(self._reader.attrs["materials_to_indices"]).items()
         }
         self._padding_idx = len(self._materials_to_indices)
+        self._start_of_structure_idx = len(self._materials_to_indices) + 1
+        self._end_of_structure_idx = len(self._materials_to_indices) + 2
         self._dataset_type = dataset_type
         (
             self._index_mapping_keys,
@@ -42,13 +45,28 @@ class RTADataset(Dataset):
         group_reader = self._reader[dataset_type_key][num_layers_key][chunk_idx_key]
         materials = np.concatenate(
             (
-                group_reader["structures_materials"][relative_index, 1:-1],
+                pad_with(
+                    group_reader["structures_materials"][
+                        relative_index, : num_layers + 2
+                    ],
+                    l_element=self._start_of_structure_idx,
+                    r_element=self._end_of_structure_idx,
+                ),
                 np.full(self._max_layers - num_layers, self.padding_idx),
             )
         )
         thicknesses = np.concatenate(
             (
-                group_reader["structures_thicknesses"][relative_index, 1:-1],
+                pad_with(
+                    np.nan_to_num(
+                        group_reader["structures_thicknesses"][
+                            relative_index, : num_layers + 2
+                        ],
+                        posinf=0,
+                    ),
+                    l_element=0,
+                    r_element=0,
+                ),
                 np.zeros(self._max_layers - num_layers),
             )
         )
@@ -60,8 +78,8 @@ class RTADataset(Dataset):
         return self._reader.attrs["wavelengths_um"]
 
     @property
-    def num_materials(self):
-        return len(self._materials_to_indices)
+    def num_tokens(self):
+        return len(self._materials_to_indices) + 3
 
     @property
     def padding_idx(self):

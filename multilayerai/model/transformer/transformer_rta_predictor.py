@@ -9,7 +9,7 @@ from multilayerai.model.transformer.blocks.encoder import EncoderBlock
 class TransformerRTAPredictor(nn.Module):
     def __init__(
         self,
-        num_materials: int,
+        num_tokens: int,
         embedding_size: int,
         padding_token_idx: int,
         num_heads: int,
@@ -26,9 +26,7 @@ class TransformerRTAPredictor(nn.Module):
         self._embedding_size = embedding_size
         self._num_wavelengths = num_wavelengths
 
-        self._material_embedder = nn.Embedding(
-            num_materials + 1, embedding_size
-        )  # +1 for padding
+        self._material_embedder = nn.Embedding(num_tokens, embedding_size)
         self._thickness_encoder = nn.Linear(1, embedding_size)
         self._positional_encodings = self._create_positional_encoding(
             max_seq_len, embedding_size
