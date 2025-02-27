@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import os
 from collections import defaultdict
 
@@ -36,8 +37,18 @@ def train_model(
     )
     criterion = nn.MSELoss()  # Mean squared error loss
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
+    )
 
     best_val_loss = float("inf")
     training_losses = defaultdict(list)

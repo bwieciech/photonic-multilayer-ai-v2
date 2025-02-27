@@ -2,7 +2,7 @@ import math
 from typing import Any, Callable
 
 import torch
-from black.trans import defaultdict
+from collections import defaultdict
 from torch import nn
 
 from multilayerai.model.transformer.blocks.encoder import EncoderBlock
@@ -111,8 +111,11 @@ class TransformerRTAPredictor(nn.Module):
 
     def _register_hooks(self) -> None:
         def get_hook(module_name: str) -> Callable[[torch.nn.Module, Any, Any], None]:
-            def hook_fn(module: torch.nn.Module, input: torch.Tensor, output: Any) -> None:
+            def hook_fn(
+                module: torch.nn.Module, input: torch.Tensor, output: Any
+            ) -> None:
                 self._cached_values["outputs"][module_name] = output
+
             return hook_fn
 
         named_modules = dict(self.named_modules())
