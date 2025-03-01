@@ -5,6 +5,7 @@ import torch
 from collections import defaultdict
 from torch import nn
 
+from multilayerai.activation import get_activation_instance
 from multilayerai.model.transformer.blocks.encoder import EncoderBlock
 
 
@@ -20,6 +21,8 @@ class TransformerRTAPredictor(nn.Module):
         num_wavelengths: int,
         dropout_rate: float = 0.1,
         max_seq_len: int = 32,
+        activation: str = "relu",
+        use_layer_norm: bool = True,
         cache: bool = False,
     ):
         super().__init__()
@@ -42,13 +45,15 @@ class TransformerRTAPredictor(nn.Module):
                     num_heads,
                     ff_hidden_dim,
                     dropout_rate,
+                    activation,
+                    use_layer_norm,
                 )
                 for _ in range(num_encoder_blocks)
             ]
         )
         self._output_head = nn.Sequential(
             nn.Linear(embedding_size, ff_hidden_dim),
-            nn.ReLU(),
+            get_activation_instance(activation, in_features=ff_hidden_dim),
             nn.Linear(
                 ff_hidden_dim, num_wavelengths * 3
             ),  # Predict R, T, A for each wavelength

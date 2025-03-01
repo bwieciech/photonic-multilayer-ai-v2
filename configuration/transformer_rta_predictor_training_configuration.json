@@ -10,5 +10,7 @@
   "batch_size": 64,
   "learning_rate": 0.00001,
   "weight_decay": 0.01,
-  "early_stopping_epochs_threshold": 3
+  "early_stopping_epochs_threshold": 3,
+  "activation": "relu",
+  "use_layer_norm": true
 }

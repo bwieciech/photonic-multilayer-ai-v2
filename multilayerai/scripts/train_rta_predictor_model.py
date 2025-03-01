@@ -108,7 +108,7 @@ def train_model(
             no_improvement_epochs = 0
             best_val_loss = val_loss
             torch.save(
-                model.state_dict(),
+                model,
                 os.path.join(output_path, "best_transformer_rta.pth"),
             )
             print(f"Saved best model with val Loss: {best_val_loss:.6f}")
@@ -157,6 +157,8 @@ if __name__ == "__main__":
         num_encoder_blocks=model_training_config.num_encoder_blocks,
         num_wavelengths=len(train_dataset.wavelengths_um),
         dropout_rate=model_training_config.dropout_rate,
+        activation=model_training_config.activation,
+        use_layer_norm=model_training_config.use_layer_norm,
     )
     train_model(
         model,
