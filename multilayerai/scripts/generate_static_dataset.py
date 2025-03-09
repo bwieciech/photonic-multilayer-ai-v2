@@ -18,7 +18,6 @@ from multilayerai.utils.padding import pad_with
 from multilayerai.utils.refractiveindex_info import RefractiveIndexInfoCsvParser
 
 CURR_DIR = os.path.dirname(os.path.abspath(__file__))
-GLASS_ALIAS = "LZOS%20K108"
 
 
 def sample_structure(
@@ -57,9 +56,11 @@ def generate_dataset(
     available_materials_aliases: List[str],
     wavelengths_um: Collection[float],
 ) -> None:
-    assert (
-        "Air" not in available_materials_aliases
-    ), "Air should not be sampled from materials as a non-inf layer"
+    # Leaving in commented out code for future reference. We want to sample Air as a material to better learn the
+    # embeddings of Air.
+    # assert (
+    #     "Air" not in available_materials_aliases
+    # ), "Air should not be sampled from materials as a non-inf layer"
 
     with h5py.File(os.path.join(dataset_config.output_dir, "dataset.hdf5"), "a") as f:
         create_dataset_file_if_missing(
@@ -82,6 +83,7 @@ def generate_dataset(
     )
     for num_layers, num_structures in structure_counts_by_num_layers.items():
         num_chunks = int(np.ceil(num_structures / dataset_config.max_chunk_size))
+        start = time.perf_counter()
         for chunk_idx in range(num_chunks):
             chunk_start = chunk_idx * dataset_config.max_chunk_size
             chunk_end = min(
@@ -114,26 +116,37 @@ def generate_dataset(
                     ]
                 )
             )
+            inf_layer_aliases = np.random.choice(
+                list(available_materials_aliases),
+                size=len(structures_materials),
+                replace=True,
+            )
             structures_materials = pad_with(
                 np.array(structures_materials),
                 l_element=materials_to_indices["Air"],
-                r_element=materials_to_indices[GLASS_ALIAS],
+                r_element=np.array(
+                    [materials_to_indices[alias] for alias in inf_layer_aliases]
+                )[..., np.newaxis],
             )
             structures_refractive_indices = pad_with(
                 np.array(structures_refractive_indices),
                 l_element=available_materials_configurations_by_alias[
                     "Air"
                 ].refractive_index_function,
-                r_element=available_materials_configurations_by_alias[
-                    GLASS_ALIAS
-                ].refractive_index_function,
+                r_element=np.array(
+                    [
+                        available_materials_configurations_by_alias[
+                            alias
+                        ].refractive_index_function
+                        for alias in inf_layer_aliases
+                    ]
+                )[..., np.newaxis],
             )
             structures_thicknesses = pad_with(
                 np.array(structures_thicknesses),
                 l_element=np.inf,
                 r_element=np.inf,
             )
-            start = time.perf_counter()
             results = unpolarized_RT_vec(
                 structures_refractive_indices,
                 structures_thicknesses,
@@ -301,17 +314,15 @@ if __name__ == "__main__":
             os.path.join(dataset_config.refractive_indices_dir, "*.csv")
         )
     }
-    available_materials_aliases = [
-        m
-        for m in available_materials_configurations_by_alias.keys()
-        if m != GLASS_ALIAS
-    ]
     available_materials_configurations_by_alias["Air"] = MaterialConfiguration(
         "Air",
         lambda wl: 1.00027,
         has_absorbing_properties=False,
-        thickness_um_lo=np.inf,
-        thickness_um_hi=np.inf,
+        thickness_um_lo=0.01,
+        thickness_um_hi=0.50,
+    )
+    available_materials_aliases = list(
+        available_materials_configurations_by_alias.keys()
     )
     materials_to_indices = {
         material: index
