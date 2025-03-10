@@ -1,6 +1,7 @@
 import json
 import multiprocessing
 import os
+import uuid
 from collections import defaultdict
 
 import torch
@@ -58,9 +59,8 @@ def train_model(
     no_improvement_epochs = 0
     for epoch in range(num_epochs):
         model.train()
-        train_loss = 0.0
         for materials, thicknesses, num_layers, rta in tqdm.tqdm(
-            train_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Train"
+            train_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Training process..."
         ):
             materials, thicknesses, rta = (
                 materials.to(device),
@@ -75,16 +75,12 @@ def train_model(
             loss.backward()
             optimizer.step()
 
-            train_loss += loss.item() * materials.size(0)
-
-        train_loss /= len(train_dataset)
-
         # Validation
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
             for materials, thicknesses, num_layers, rta in tqdm.tqdm(
-                val_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Val"
+                val_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Evaluation: Val"
             ):
                 materials, thicknesses, rta = (
                     materials.to(device),
@@ -95,8 +91,23 @@ def train_model(
                 loss = criterion(rta_pred, rta)
                 validation_losses[epoch].append(loss.cpu().detach().item())
                 val_loss += loss.item() * materials.size(0)
-
         val_loss /= len(val_dataset)
+
+        train_loss = 0.0
+        with torch.no_grad():
+            for materials, thicknesses, num_layers, rta in tqdm.tqdm(
+                train_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Evaluation: Train"
+            ):
+                materials, thicknesses, rta = (
+                    materials.to(device),
+                    thicknesses.to(device),
+                    rta.to(device),
+                )
+                rta_pred = model(materials, thicknesses)
+                loss = criterion(rta_pred, rta)
+                training_losses[epoch].append(loss.cpu().detach().item())
+                train_loss += loss.item() * materials.size(0)
+        train_loss /= len(train_dataset)
 
         header = f"========== Epoch {epoch + 1}/{num_epochs} =========="
         print(header)
@@ -107,9 +118,15 @@ def train_model(
         if val_loss < best_val_loss:
             no_improvement_epochs = 0
             best_val_loss = val_loss
+            payload = {
+                "model": model,
+                "optimizer": optimizer,
+                "epoch": epoch,
+                "val_loss": val_loss,
+            }
             torch.save(
-                model,
-                os.path.join(output_path, "best_transformer_rta.pth"),
+                payload,
+                os.path.join(output_path, "checkpoint.pth"),
             )
             print(f"Saved best model with val Loss: {best_val_loss:.6f}")
         else:
@@ -160,11 +177,17 @@ if __name__ == "__main__":
         activation=model_training_config.activation,
         use_layer_norm=model_training_config.use_layer_norm,
     )
+
+    output_path = os.path.join(model_training_config.output_path, uuid.uuid4().hex)
+    os.makedirs(output_path, exist_ok=True)
+    with open(os.path.join(output_path, "configuration.json"), "w") as f:
+        json.dump(model_training_config.__dict__, f)
+
     train_model(
         model,
         train_dataset,
         val_dataset,
-        output_path=model_training_config.output_path,
+        output_path=output_path,
         num_epochs=model_training_config.num_epochs,
         batch_size=model_training_config.batch_size,
         learning_rate=model_training_config.learning_rate,
