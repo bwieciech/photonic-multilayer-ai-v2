@@ -8,16 +8,16 @@ class PositionalEmbedding(torch.nn.Module):
         super().__init__()
         self._embedding = torch.nn.Embedding(vocab_size, embedding_size)
         # + 2 for encoding thickness and is_inf thickness flag, appended to the embedding
-        self._positional_encoding = PositionalEncoding(max_len, embedding_size + 2)
-        self._embedding_size = embedding_size + 2
+        self.positional_encoding = PositionalEncoding(max_len, embedding_size + 2)
+        self.embedding_size = embedding_size + 2
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         material = x[:, :, 0].int()
         thickness_info = x[:, :, 1:]
         embedding = self._embedding(material)
         x = torch.cat([embedding, thickness_info], dim=-1)
-        x = math.sqrt(self._embedding_size) * x
-        return self._positional_encoding(x)
+        x = math.sqrt(self.embedding_size) * x
+        return self.positional_encoding(x)
 
 
 class PositionalEncoding(torch.nn.Module):

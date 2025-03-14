@@ -18,10 +18,10 @@ class EncoderBlock(torch.nn.Module):
         use_layer_norm: bool,
     ):
         super().__init__()
-        self._self_attention = GlobalSelfAttention(
+        self.self_attention = GlobalSelfAttention(
             input_embedding_size, num_heads, dropout_rate
         )
-        self._feed_forward = FeedForward(
+        self.feed_forward = FeedForward(
             input_embedding_size,
             output_embedding_size,
             ff_hidden_dim,
@@ -30,6 +30,6 @@ class EncoderBlock(torch.nn.Module):
         )
 
     def forward(self, x: torch.Tensor, padding_mask: torch.Tensor) -> torch.Tensor:
-        x = self._self_attention(x, attn_mask=padding_mask)
-        x = self._feed_forward(x)
+        x = self.self_attention(x, attn_mask=padding_mask)
+        x = self.feed_forward(x)
         return x
