@@ -1,6 +1,7 @@
 import math
 from typing import Any, Callable
 
+import einops
 import torch
 from collections import defaultdict
 from torch import nn
@@ -27,14 +28,14 @@ class TransformerRTAPredictor(nn.Module):
     ):
         super().__init__()
 
-        self._padding_token_idx = padding_token_idx
-        self._num_heads = num_heads
-        self._embedding_size = embedding_size
-        self._num_wavelengths = num_wavelengths
+        self.padding_token_idx = padding_token_idx
+        self.num_heads = num_heads
+        self.embedding_size = embedding_size
+        self.num_wavelengths = num_wavelengths
 
-        self._material_embedder = nn.Embedding(num_tokens, embedding_size)
-        self._thickness_encoder = nn.Linear(1, embedding_size)
-        self._positional_encodings = self._create_positional_encoding(
+        self.material_embedder = nn.Embedding(num_tokens, embedding_size)
+        self.thickness_encoder = nn.Linear(1, embedding_size)
+        self.positional_encodings = self._create_positional_encoding(
             max_seq_len, embedding_size
         )
         self.encoder_blocks = torch.nn.ModuleList(
@@ -51,47 +52,47 @@ class TransformerRTAPredictor(nn.Module):
                 for _ in range(num_encoder_blocks)
             ]
         )
-        self._output_head = nn.Sequential(
+        self.output_head = nn.Sequential(
             nn.Linear(embedding_size, ff_hidden_dim),
             get_activation_instance(activation, in_features=ff_hidden_dim),
             nn.Linear(
                 ff_hidden_dim, num_wavelengths * 3
             ),  # Predict R, T, A for each wavelength
         )
-        self._dropout = torch.nn.Dropout(dropout_rate)
-        self._cache = cache
+        self.dropout = torch.nn.Dropout(dropout_rate)
+        self.cache = cache
         if cache:
-            self._cached_values = defaultdict(dict)
+            self.cached_values = defaultdict(dict)
             self._register_hooks()
 
     def forward(
         self, materials: torch.Tensor, thicknesses: torch.Tensor
     ) -> torch.Tensor:
-        if self._cache:
-            self._cached_values = defaultdict(dict)
+        if self.cache:
+            self.cached_values = defaultdict(dict)
 
         batch_size, seq_len = materials.shape
         input_padding_arr = torch.where(
-            materials == self._padding_token_idx, -torch.inf, 0
+            materials == self.padding_token_idx, -torch.inf, 0
         )
         input_padding_mask = self._create_padding_mask(input_padding_arr)
 
-        materials_embeddings = self._material_embedder(materials.int())
-        thickness_encoding = self._thickness_encoder(thicknesses.unsqueeze(-1).float())
-        positional_encoding = self._positional_encodings[:, :seq_len, :].to(
+        materials_embeddings = self.material_embedder(materials.int())
+        thickness_encoding = self.thickness_encoder(thicknesses.unsqueeze(-1).float())
+        positional_encoding = self.positional_encodings[:, :seq_len, :].to(
             materials.device
         )
         x = materials_embeddings + thickness_encoding + positional_encoding
-        x = self._dropout(x)
+        x = self.dropout(x)
         for encoder_block in self.encoder_blocks:
             x = encoder_block(x, input_padding_mask)
-            x = self._dropout(x)
+            x = self.dropout(x)
 
-        x = x.sum(dim=1) / (materials != self._padding_token_idx).sum(dim=-1).unsqueeze(
+        x = x.sum(dim=1) / (materials != self.padding_token_idx).sum(dim=-1).unsqueeze(
             dim=-1
         )
-        rta_flat = self._output_head(x)
-        rta_pred = rta_flat.view(batch_size, self._num_wavelengths, 3)
+        rta_flat = self.output_head(x)
+        rta_pred = rta_flat.view(batch_size, self.num_wavelengths, 3)
 
         rta_pred = torch.softmax(rta_pred, dim=-1)
 
@@ -112,14 +113,18 @@ class TransformerRTAPredictor(nn.Module):
 
     def _create_padding_mask(self, arr: torch.Tensor) -> torch.Tensor:
         mask = arr.unsqueeze(1).expand(-1, arr.size(1), -1)
-        return torch.repeat_interleave(mask, self._num_heads, dim=0)
+        return einops.repeat(
+            mask,
+            "batch pos_from pos_to -> batch num_heads pos_from pos_to",
+            num_heads=self.num_heads,
+        )
 
     def _register_hooks(self) -> None:
         def get_hook(module_name: str) -> Callable[[torch.nn.Module, Any, Any], None]:
             def hook_fn(
                 module: torch.nn.Module, input: torch.Tensor, output: Any
             ) -> None:
-                self._cached_values["outputs"][module_name] = output
+                self.cached_values["outputs"][module_name] = output
 
             return hook_fn
 
