@@ -12,9 +12,16 @@ from multilayerai.utils.padding import pad_with
 
 
 class RTADataset(Dataset):
-    def __init__(self, dataset_path: str, dataset_type: Optional[DatasetType] = None):
+    def __init__(
+        self,
+        dataset_path: str,
+        cache_data: bool,
+        dataset_type: Optional[DatasetType] = None,
+    ):
         self._dataset_path = dataset_path
         self._reader = h5py.File(dataset_path, "r")
+        self._cache_data = cache_data
+        self._cache = {} if cache_data else None
         self._max_layers = self._reader.attrs["max_layers"]  # +2 for the inf layers
         self._materials_to_indices = {
             k: int(v)
@@ -36,6 +43,9 @@ class RTADataset(Dataset):
     def __getitem__(
         self, index: int
     ) -> Tuple[NDArray[int], NDArray[float], int, NDArray[float]]:
+        if self._cache_data and index in self._cache:
+            return self._cache[index]
+
         (
             dataset_type_key,
             num_layers_key,
@@ -71,7 +81,11 @@ class RTADataset(Dataset):
             )
         )
         RTA = group_reader["RTA"][relative_index]
-        return materials, thicknesses, num_layers, RTA
+        if self._cache_data:
+            self._cache[index] = (materials, thicknesses, num_layers, RTA)
+            return self._cache[index]
+        else:
+            return materials, thicknesses, num_layers, RTA
 
     @property
     def wavelengths_um(self):

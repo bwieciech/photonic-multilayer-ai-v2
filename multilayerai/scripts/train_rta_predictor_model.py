@@ -3,11 +3,12 @@ import multiprocessing
 import os
 import uuid
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, List, Dict, Union
 
 import numpy as np
 import torch
 import tqdm
+from numpy._typing import NDArray
 from torch import nn, Tensor
 from torch.utils.data import DataLoader
 
@@ -36,6 +37,7 @@ def train_model(
     output_path: str,
     num_epochs: int,
     batch_size: int,
+    validation_batch_size: int,
     learning_rate: float,
     weight_decay: float,
     early_stopping_epochs_threshold: int,
@@ -46,15 +48,21 @@ def train_model(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay
     )
 
-    train_loader = DataLoader(
+    training_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
     )
-    val_loader = DataLoader(
+    training_validation_loader = DataLoader(
+        train_dataset,
+        batch_size=validation_batch_size,
+        shuffle=False,
+        num_workers=max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
+    )
+    validation_loader = DataLoader(
         val_dataset,
-        batch_size=batch_size,
+        batch_size=validation_batch_size,
         shuffle=False,
         num_workers=max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
     )
@@ -69,10 +77,10 @@ def train_model(
 
     # Training
     no_improvement_epochs = 0
-    for epoch in range(num_epochs):
+    for epoch in range(1, num_epochs + 1):
         model.train()
         for materials, thicknesses, num_layers, rta in tqdm.tqdm(
-            train_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Training process..."
+            training_loader, desc=f"Epoch {epoch}/{num_epochs} - Training..."
         ):
             materials, thicknesses, rta = (
                 materials.to(device),
@@ -88,47 +96,27 @@ def train_model(
 
         # Validation
         model.eval()
-        val_loss = 0.0 if model.n_instances is None else np.zeros(model.n_instances)
-        with torch.no_grad():
-            for materials, thicknesses, num_layers, rta in tqdm.tqdm(
-                val_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Evaluation: Val"
-            ):
-                materials, thicknesses, rta = (
-                    materials.to(device),
-                    thicknesses.to(device),
-                    rta.to(device),
-                )
-                rta_pred = model(materials, thicknesses)
-                loss = mse_loss(rta_pred, rta, model.n_instances)
-                if model.n_instances is None:
-                    validation_losses[epoch].append(loss.cpu().detach().item())
-                    val_loss += loss.item() * materials.size(0)
-                else:
-                    validation_losses[epoch].append(loss.cpu().detach().tolist())
-                    val_loss += loss.numpy() * materials.size(0)
-        val_loss /= len(val_dataset)
+        val_loss = validate(
+            validation_loader,
+            model,
+            validation_losses,
+            epoch,
+            num_epochs,
+            "Validation",
+            device,
+        )
 
-        train_loss = 0.0 if model.n_instances is None else np.zeros(model.n_instances)
-        with torch.no_grad():
-            for materials, thicknesses, num_layers, rta in tqdm.tqdm(
-                train_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Evaluation: Train"
-            ):
-                materials, thicknesses, rta = (
-                    materials.to(device),
-                    thicknesses.to(device),
-                    rta.to(device),
-                )
-                rta_pred = model(materials, thicknesses)
-                loss = mse_loss(rta_pred, rta, model.n_instances)
-                if model.n_instances is None:
-                    training_losses[epoch].append(loss.cpu().detach().item())
-                    train_loss += loss.item() * materials.size(0)
-                else:
-                    training_losses[epoch].append(loss.cpu().detach().tolist())
-                    train_loss += loss.numpy() * materials.size(0)
-        train_loss /= len(train_dataset)
+        train_loss = validate(
+            training_validation_loader,
+            model,
+            training_losses,
+            epoch,
+            num_epochs,
+            "Training",
+            device,
+        )
 
-        header = f"========== Epoch {epoch + 1}/{num_epochs} =========="
+        header = f"========== Epoch {epoch}/{num_epochs} =========="
         print(header)
         print(f"Training loss(es): {train_loss}")
         print(f"Validation loss(es): {val_loss}")
@@ -158,17 +146,56 @@ def train_model(
                 print(
                     f"No validation loss improvement for {no_improvement_epochs} epochs, finishing training job."
                 )
+                save_metrics(output_path, training_losses, validation_losses)
                 break
 
-        # Save metrics
-        with open(os.path.join(output_path, "metrics.json"), "w") as f:
-            json.dump(
-                {
-                    "training_losses": training_losses,
-                    "validation_losses": validation_losses,
-                },
-                f,
+        save_metrics(output_path, training_losses, validation_losses)
+
+
+def validate(
+    loader: DataLoader,
+    model: TransformerRTAPredictor,
+    losses_history: Dict[int, Union[List[float], List[NDArray[float]]]],
+    epoch: int,
+    num_epochs: int,
+    dataset_tag: str,
+    device: str,
+) -> Union[float, NDArray[float]]:
+    total_loss = 0.0 if model.n_instances is None else np.zeros(model.n_instances)
+    with torch.no_grad():
+        for materials, thicknesses, num_layers, rta in tqdm.tqdm(
+            loader,
+            desc=f"Epoch {epoch}/{num_epochs} - Evaluation - {dataset_tag} Dataset",
+        ):
+            materials, thicknesses, rta = (
+                materials.to(device),
+                thicknesses.to(device),
+                rta.to(device),
             )
+            rta_pred = model(materials, thicknesses)
+            loss = mse_loss(rta_pred, rta, model.n_instances)
+            if model.n_instances is None:
+                losses_history[epoch].append(loss.cpu().item())
+                total_loss += loss.item() * materials.size(0)
+            else:
+                losses_history[epoch].append(loss.cpu().tolist())
+                total_loss += loss.cpu().numpy() * materials.size(0)
+    return total_loss / len(train_dataset)
+
+
+def save_metrics(
+    output_path: str,
+    training_losses: Dict[int, Union[List[float], List[NDArray[float]]]],
+    validation_losses: Dict[int, Union[List[float], List[NDArray[float]]]],
+):
+    with open(os.path.join(output_path, "metrics.json"), "w") as f:
+        json.dump(
+            {
+                "training_losses": training_losses,
+                "validation_losses": validation_losses,
+            },
+            f,
+        )
 
 
 if __name__ == "__main__":
@@ -186,8 +213,16 @@ if __name__ == "__main__":
             **json.load(f)
         )
 
-    train_dataset = RTADataset(model_training_config.dataset_path, DatasetType.TRAIN)
-    val_dataset = RTADataset(model_training_config.dataset_path, DatasetType.VALIDATION)
+    train_dataset = RTADataset(
+        model_training_config.dataset_path,
+        model_training_config.cache_data,
+        DatasetType.TRAIN,
+    )
+    val_dataset = RTADataset(
+        model_training_config.dataset_path,
+        model_training_config.cache_data,
+        DatasetType.VALIDATION,
+    )
 
     model = TransformerRTAPredictor(
         num_tokens=train_dataset.num_tokens,
@@ -213,6 +248,7 @@ if __name__ == "__main__":
         output_path=output_path,
         num_epochs=model_training_config.num_epochs,
         batch_size=model_training_config.batch_size,
+        validation_batch_size=model_training_config.validation_batch_size,
         learning_rate=model_training_config.learning_rate,
         weight_decay=model_training_config.weight_decay,
         early_stopping_epochs_threshold=model_training_config.early_stopping_epochs_threshold,
