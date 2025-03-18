@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch.nn
 
 from multilayerai.model.transformer.blocks.attention import (
@@ -13,13 +15,13 @@ class EncoderBlock(torch.nn.Module):
         output_embedding_size: int,
         num_heads: int,
         ff_hidden_dim: int,
-        dropout_rate: float,
         activation: str,
         use_layer_norm: bool,
+        n_instances: Optional[int] = None,
     ):
         super().__init__()
         self.self_attention = GlobalSelfAttention(
-            input_embedding_size, num_heads, dropout_rate
+            input_embedding_size, num_heads, n_instances
         )
         self.feed_forward = FeedForward(
             input_embedding_size,
@@ -27,6 +29,7 @@ class EncoderBlock(torch.nn.Module):
             ff_hidden_dim,
             activation,
             use_layer_norm,
+            n_instances,
         )
 
     def forward(self, x: torch.Tensor, padding_mask: torch.Tensor) -> torch.Tensor:

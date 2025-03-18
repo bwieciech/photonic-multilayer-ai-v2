@@ -1,13 +1,17 @@
+from typing import Optional
+
 import torch.nn
 
 from multilayerai.model.layers import LayerNorm, MultiheadAttention
 
 
 class CrossAttention(torch.nn.Module):
-    def __init__(self, embedding_size: int, num_heads: int, dropout_rate: float):
+    def __init__(
+        self, embedding_size: int, num_heads: int, n_instances: Optional[int] = None
+    ):
         super().__init__()
-        self.mha = MultiheadAttention(embedding_size, num_heads)
-        self.layer_norm = LayerNorm(embedding_size)
+        self.mha = MultiheadAttention(embedding_size, num_heads, n_instances)
+        self.layer_norm = LayerNorm(embedding_size, n_instances)
 
     def forward(self, x: torch.Tensor, context: torch.Tensor, attn_mask: torch.Tensor):
         x_input = x
@@ -17,10 +21,12 @@ class CrossAttention(torch.nn.Module):
 
 
 class GlobalSelfAttention(torch.nn.Module):
-    def __init__(self, embedding_size: int, num_heads: int, dropout_rate: float):
+    def __init__(
+        self, embedding_size: int, num_heads: int, n_instances: Optional[int] = None
+    ):
         super().__init__()
-        self.mha = MultiheadAttention(embedding_size, num_heads)
-        self.layer_norm = LayerNorm(embedding_size)
+        self.mha = MultiheadAttention(embedding_size, num_heads, n_instances)
+        self.layer_norm = LayerNorm(embedding_size, n_instances)
 
     def forward(self, x: torch.Tensor, attn_mask: torch.Tensor):
         x_input = x
@@ -30,10 +36,12 @@ class GlobalSelfAttention(torch.nn.Module):
 
 
 class CausalSelfAttention(torch.nn.Module):
-    def __init__(self, embedding_size: int, num_heads: int, dropout_rate: float):
+    def __init__(
+        self, embedding_size: int, num_heads: int, n_instances: Optional[int] = None
+    ):
         super().__init__()
-        self.mha = MultiheadAttention(embedding_size, num_heads)
-        self.layer_norm = LayerNorm(embedding_size)
+        self.mha = MultiheadAttention(embedding_size, num_heads, n_instances)
+        self.layer_norm = LayerNorm(embedding_size, n_instances)
 
     def forward(self, x: torch.Tensor, padding_mask: torch.Tensor):
         attn_mask = (

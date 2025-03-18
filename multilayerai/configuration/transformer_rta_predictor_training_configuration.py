@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Union, Collection
 
 
 @dataclass
@@ -8,8 +9,7 @@ class TransformerRTAPredictorTrainingConfiguration:
     embedding_size: int = 128
     ff_hidden_dim: int = 4 * embedding_size
     num_heads: int = 4
-    num_encoder_blocks: int = 1
-    dropout_rate: float = 0.0
+    num_encoder_blocks: Union[int, Collection[int]] = (0, 1, 2, 3, 4)
     num_epochs: int = 64
     batch_size: int = 128
     learning_rate: float = 1e-5

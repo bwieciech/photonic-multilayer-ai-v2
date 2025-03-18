@@ -3,10 +3,12 @@ import multiprocessing
 import os
 import uuid
 from collections import defaultdict
+from typing import Optional
 
+import numpy as np
 import torch
 import tqdm
-from torch import nn
+from torch import nn, Tensor
 from torch.utils.data import DataLoader
 
 from multilayerai.configuration.transformer_rta_predictor_training_configuration import (
@@ -18,6 +20,13 @@ from multilayerai.model.transformer.transformer_rta_predictor import (
 )
 
 CURR_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def mse_loss(y_pred: Tensor, y_true: Tensor, n_instances: Optional[int]) -> Tensor:
+    if n_instances is None:
+        return torch.mean((y_true - y_pred) ** 2)
+    y_pred = y_pred.permute(1, 0, 2, 3)
+    return torch.mean((y_true - y_pred) ** 2, dim=(1, 2, 3))
 
 
 def train_model(
@@ -36,7 +45,6 @@ def train_model(
     optimizer = torch.optim.Adam(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay
     )
-    criterion = nn.MSELoss()  # Mean squared error loss
 
     train_loader = DataLoader(
         train_dataset,
@@ -51,7 +59,11 @@ def train_model(
         num_workers=max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
     )
 
-    best_val_loss = float("inf")
+    best_val_loss = (
+        float("inf")
+        if model.n_instances is None
+        else np.inf * np.ones(model.n_instances)
+    )
     training_losses = defaultdict(list)
     validation_losses = defaultdict(list)
 
@@ -70,14 +82,13 @@ def train_model(
 
             optimizer.zero_grad()
             rta_pred = model(materials, thicknesses)
-            loss = criterion(rta_pred, rta)
-            training_losses[epoch].append(loss.cpu().detach().item())
-            loss.backward()
+            loss = mse_loss(rta_pred, rta, model.n_instances)
+            loss.sum().backward()
             optimizer.step()
 
         # Validation
         model.eval()
-        val_loss = 0.0
+        val_loss = 0.0 if model.n_instances is None else np.zeros(model.n_instances)
         with torch.no_grad():
             for materials, thicknesses, num_layers, rta in tqdm.tqdm(
                 val_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Evaluation: Val"
@@ -88,12 +99,16 @@ def train_model(
                     rta.to(device),
                 )
                 rta_pred = model(materials, thicknesses)
-                loss = criterion(rta_pred, rta)
-                validation_losses[epoch].append(loss.cpu().detach().item())
-                val_loss += loss.item() * materials.size(0)
+                loss = mse_loss(rta_pred, rta, model.n_instances)
+                if model.n_instances is None:
+                    validation_losses[epoch].append(loss.cpu().detach().item())
+                    val_loss += loss.item() * materials.size(0)
+                else:
+                    validation_losses[epoch].append(loss.cpu().detach().tolist())
+                    val_loss += loss.numpy() * materials.size(0)
         val_loss /= len(val_dataset)
 
-        train_loss = 0.0
+        train_loss = 0.0 if model.n_instances is None else np.zeros(model.n_instances)
         with torch.no_grad():
             for materials, thicknesses, num_layers, rta in tqdm.tqdm(
                 train_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Evaluation: Train"
@@ -104,37 +119,46 @@ def train_model(
                     rta.to(device),
                 )
                 rta_pred = model(materials, thicknesses)
-                loss = criterion(rta_pred, rta)
-                training_losses[epoch].append(loss.cpu().detach().item())
-                train_loss += loss.item() * materials.size(0)
+                loss = mse_loss(rta_pred, rta, model.n_instances)
+                if model.n_instances is None:
+                    training_losses[epoch].append(loss.cpu().detach().item())
+                    train_loss += loss.item() * materials.size(0)
+                else:
+                    training_losses[epoch].append(loss.cpu().detach().tolist())
+                    train_loss += loss.numpy() * materials.size(0)
         train_loss /= len(train_dataset)
 
         header = f"========== Epoch {epoch + 1}/{num_epochs} =========="
         print(header)
-        print(f"Training loss: {train_loss:.6f}")
-        print(f"Validation loss: {val_loss:.6f}")
+        print(f"Training loss(es): {train_loss}")
+        print(f"Validation loss(es): {val_loss}")
         print("=" * len(header))
 
-        if val_loss < best_val_loss:
+        payload = {
+            "model": model,
+            "optimizer": optimizer,
+            "epoch": epoch,
+            "val_loss": val_loss,
+        }
+        torch.save(
+            payload,
+            os.path.join(output_path, "checkpoint.pth"),
+        )
+
+        val_loss_improved = val_loss < best_val_loss
+        if model.n_instances is None and val_loss_improved:
             no_improvement_epochs = 0
             best_val_loss = val_loss
-            payload = {
-                "model": model,
-                "optimizer": optimizer,
-                "epoch": epoch,
-                "val_loss": val_loss,
-            }
-            torch.save(
-                payload,
-                os.path.join(output_path, "checkpoint.pth"),
-            )
-            print(f"Saved best model with val Loss: {best_val_loss:.6f}")
+        elif model.n_instances is not None and val_loss_improved.any():
+            no_improvement_epochs = 0
+            best_val_loss[val_loss_improved] = val_loss[val_loss_improved]
         else:
             no_improvement_epochs += 1
             if no_improvement_epochs > early_stopping_epochs_threshold:
                 print(
                     f"No validation loss improvement for {no_improvement_epochs} epochs, finishing training job."
                 )
+                break
 
         # Save metrics
         with open(os.path.join(output_path, "metrics.json"), "w") as f:
@@ -173,7 +197,6 @@ if __name__ == "__main__":
         ff_hidden_dim=model_training_config.ff_hidden_dim,
         num_encoder_blocks=model_training_config.num_encoder_blocks,
         num_wavelengths=len(train_dataset.wavelengths_um),
-        dropout_rate=model_training_config.dropout_rate,
         activation=model_training_config.activation,
         use_layer_norm=model_training_config.use_layer_norm,
     )
