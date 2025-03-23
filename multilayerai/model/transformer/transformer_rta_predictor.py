@@ -1,5 +1,5 @@
 import math
-from typing import Any, Callable, Collection, Union, Optional
+from typing import Any, Callable, Collection, Union
 
 import einops
 import torch
@@ -7,7 +7,7 @@ from collections import defaultdict
 from torch import nn
 
 from multilayerai.activation import get_activation_instance
-from multilayerai.model.layers import Linear
+from multilayerai.model.layers import Linear, Embedding
 from multilayerai.model.transformer.blocks.encoder import EncoderBlock
 
 
@@ -33,15 +33,15 @@ class TransformerRTAPredictor(nn.Module):
         self.embedding_size = embedding_size
         self.num_wavelengths = num_wavelengths
 
-        self.material_embedder = nn.Embedding(num_tokens, embedding_size)
-        self.thickness_encoder = nn.Linear(1, embedding_size)
-        self.positional_encodings = self._create_positional_encoding(
-            max_seq_len, embedding_size
-        )
-        self.register_buffer("num_encoder_blocks", torch.tensor(num_encoder_blocks))
         self.n_instances = (
             None if isinstance(num_encoder_blocks, int) else len(num_encoder_blocks)
         )
+        self.material_embedder = Embedding(num_tokens, embedding_size, self.n_instances)
+        self.thickness_embedder = Linear(1, embedding_size, self.n_instances)
+        self.positional_embedder = Embedding(
+            max_seq_len, embedding_size, self.n_instances
+        )
+        self.register_buffer("num_encoder_blocks", torch.tensor(num_encoder_blocks))
         self.encoder_blocks = torch.nn.ModuleList(
             [
                 EncoderBlock(
@@ -84,18 +84,26 @@ class TransformerRTAPredictor(nn.Module):
         )
         input_padding_mask = self._create_padding_mask(input_padding_arr)
 
-        materials_embeddings = self.material_embedder(materials.int())
-        thickness_encoding = self.thickness_encoder(thicknesses.unsqueeze(-1).float())
-        positional_encoding = self.positional_encodings[:, :seq_len, :].to(
-            materials.device
-        )
-        x = materials_embeddings + thickness_encoding + positional_encoding
         if self.n_instances is not None:
-            x = einops.repeat(
-                x,
-                "batch pos embedding_size -> batch n_instances pos embedding_size",
+            materials = einops.repeat(
+                materials,
+                "batch pos -> batch n_instances pos",
                 n_instances=self.n_instances,
             )
+            thicknesses = einops.repeat(
+                thicknesses,
+                "batch pos -> batch n_instances pos",
+                n_instances=self.n_instances,
+            )
+
+        materials_embeddings = self.material_embedder(materials)
+        thickness_embeddings = self.thickness_embedder(
+            thicknesses.unsqueeze(-1).float()
+        )
+        positional_embeddings = self.positional_embedder[..., :seq_len, :].to(
+            materials.device
+        )
+        x = materials_embeddings + thickness_embeddings + positional_embeddings
         for block_number, encoder_block in enumerate(self.encoder_blocks):
             if self.n_instances is None:
                 x = encoder_block(x, input_padding_mask)
@@ -115,19 +123,6 @@ class TransformerRTAPredictor(nn.Module):
         x = rta_flat.view(output_shape)
 
         return torch.softmax(x, dim=-1)
-
-    def _create_positional_encoding(
-        self, max_len: int, embedding_size: int
-    ) -> torch.Tensor:
-        position = torch.arange(max_len).unsqueeze(1).float()
-        div_term = torch.exp(
-            torch.arange(0, embedding_size, 2).float()
-            * (-math.log(10000.0) / embedding_size)
-        )
-        pe = torch.zeros(max_len, embedding_size)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term[: embedding_size // 2])
-        return pe.unsqueeze(0)
 
     def _create_padding_mask(self, arr: torch.Tensor) -> torch.Tensor:
         mask = arr.unsqueeze(1).expand(-1, arr.size(1), -1)
