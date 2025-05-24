@@ -41,6 +41,7 @@ def train_model(
     learning_rate: float,
     weight_decay: float,
     early_stopping_epochs_threshold: int,
+    cache_data: bool,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
 ):
     model = model.to(device)
@@ -52,19 +53,19 @@ def train_model(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
+        num_workers=0 if cache_data else max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
     )
     training_validation_loader = DataLoader(
         train_dataset,
         batch_size=validation_batch_size,
         shuffle=False,
-        num_workers=max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
+        num_workers=0 if cache_data else max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
     )
     validation_loader = DataLoader(
         val_dataset,
         batch_size=validation_batch_size,
         shuffle=False,
-        num_workers=max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
+        num_workers=0 if cache_data else max(1, int(1.5 * multiprocessing.cpu_count()) - 1),
     )
 
     best_val_loss = (
@@ -251,5 +252,6 @@ if __name__ == "__main__":
         validation_batch_size=model_training_config.validation_batch_size,
         learning_rate=model_training_config.learning_rate,
         weight_decay=model_training_config.weight_decay,
+        cache_data=model_training_config.cache_data,
         early_stopping_epochs_threshold=model_training_config.early_stopping_epochs_threshold,
     )
